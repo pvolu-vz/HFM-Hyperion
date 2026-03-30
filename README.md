@@ -18,6 +18,13 @@ A VS Code workspace that gives you a custom **GitHub Copilot agent** and **skill
 
 ## 1. Clone & Open the Repo
 
+**One click** — VS Code clones the repo and opens the correct root folder automatically:
+
+[![Open in VS Code](https://img.shields.io/badge/Open%20in-VS%20Code-blue?logo=visualstudiocode)](vscode://vscode.git/clone?url=https://github.com/pvolu-vz/OAA_Agent.git)
+
+<details>
+<summary>Prefer the terminal?</summary>
+
 ```bash
 git clone https://github.com/pvolu-vz/OAA_Agent.git
 cd OAA_Agent
@@ -25,6 +32,8 @@ code .
 ```
 
 > **Important:** Open the **root folder** (`OAA_Agent/`), not a subfolder. VS Code only auto-discovers `.github/agents/` and `.github/skills/` when the workspace root contains them.
+
+</details>
 
 ---
 
