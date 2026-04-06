@@ -1,0 +1,3 @@
+.env
+integrations/*/Samples/
+.DS_Store
