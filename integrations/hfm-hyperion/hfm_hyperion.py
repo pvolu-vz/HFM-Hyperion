@@ -343,77 +343,38 @@ def is_group_entry(name, domain, group_lookup):
 # ===========================================================================
 
 def lookup_approver_idp_ids(veza_con, display_names, tenant_id):
-    """Return {display_name: idp_unique_id} for approvers via Veza Graph Query API."""
+    """Return {display_name: idp_unique_id} for approvers via Veza node lookup.
+
+    Queries AzureADUser nodes by display name, then narrows to the target tenant
+    by matching azure_tenant_id in the node properties.
+    """
     result_map = {}
     for name in set(display_names):
         if not name:
             continue
-        query = {
-            "no_relation": False,
-            "include_nodes": True,
-            "query_type": "SOURCE_TO_DESTINATION",
-            "source_node_types": {
-                "nodes": [
-                    {
-                        "node_type": "AzureADUser",
-                        "tags_to_get": [],
-                        "condition_expression": {
-                            "operator": "AND",
-                            "specs": [],
-                            "tag_specs": [],
-                            "child_expressions": [
-                                {
-                                    "operator": "AND",
-                                    "specs": [
-                                        {
-                                            "property": "name",
-                                            "fn": "EQ",
-                                            "value": name,
-                                            "not": False,
-                                        }
-                                    ],
-                                    "tag_specs": [],
-                                    "child_expressions": [],
-                                },
-                                {
-                                    "operator": "AND",
-                                    "specs": [
-                                        {
-                                            "property": "azure_tenant_id",
-                                            "fn": "IN",
-                                            "value": [tenant_id],
-                                            "not": False,
-                                        }
-                                    ],
-                                    "tag_specs": [],
-                                    "child_expressions": [],
-                                },
-                            ],
-                        },
-                        "direct_relationship_only": False,
-                    }
-                ]
-            },
-            "node_relationship_type": "EFFECTIVE_ACCESS",
-            "result_value_type": "SOURCE_NODES_WITH_COUNTS",
-            "include_all_source_tags_in_results": False,
-            "include_all_destination_tags_in_results": False,
-            "include_sub_permissions": False,
-            "include_permissions_summary": True,
-        }
         try:
-            resp = veza_con.api_post("/api/v1/assessments/query", data=query)
+            resp = veza_con.api_get(
+                "/api/v1/nodes",
+                params={"filter": f"name:{name}", "node_type": "AzureADUser"},
+            )
             nodes = resp.get("nodes") or resp.get("values") or []
-            if len(nodes) == 1:
-                result_map[name] = nodes[0].get("idp_unique_id")
-            elif len(nodes) == 0:
+            # Narrow to the target tenant via node properties
+            tenant_nodes = [
+                n for n in nodes
+                if (n.get("azure_tenant_id") == tenant_id
+                    or n.get("node_props", {}).get("azure_tenant_id") == tenant_id)
+            ]
+            candidates = tenant_nodes if tenant_nodes else nodes
+            if len(candidates) == 1:
+                result_map[name] = candidates[0].get("idp_unique_id")
+            elif len(candidates) == 0:
                 log.debug("No AzureADUser found for approver '%s' — skipping tag", name)
                 result_map[name] = None
             else:
                 log.warning("Multiple AzureADUsers match '%s' — using first for tag", name)
-                result_map[name] = nodes[0].get("idp_unique_id")
+                result_map[name] = candidates[0].get("idp_unique_id")
         except OAAClientError as exc:
-            log.warning("Veza query failed for approver '%s': %s", name, exc)
+            log.warning("Veza node lookup failed for approver '%s': %s", name, exc)
             result_map[name] = None
     return result_map
 
