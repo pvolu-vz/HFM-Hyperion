@@ -20,6 +20,7 @@ import re
 import sys
 from collections import defaultdict
 
+import openpyxl
 from dotenv import load_dotenv
 from oaaclient.client import OAAClient, OAAClientError
 from oaaclient.templates import CustomApplication, OAAPermission, OAAPropertyType
@@ -28,6 +29,8 @@ from oaaclient.templates import CustomApplication, OAAPermission, OAAPropertyTyp
 # Logging
 # ---------------------------------------------------------------------------
 log = logging.getLogger("hfm_hyperion")
+
+AZURE_AD_TENANT_ID = "67d2558f-a4af-4478-bc72-d7585f436bad"
 
 
 # ===========================================================================
@@ -186,6 +189,125 @@ def parse_groups_csv(filepath):
 
 
 # ===========================================================================
+# Entity owner parsers
+# ===========================================================================
+
+def parse_hfm_entity_owners(excel_path, application_name):
+    """Parse the HFM Security Request Form approval matrix for one application.
+
+    Reads the sheet named '<application_name>_Approvers' and returns a mapping
+    of entity code (col 1) → approver display name (col 5).
+
+    Args:
+        excel_path (str): Path to the HFM Security Request Form Excel file.
+        application_name (str): HFM application name selecting the sheet
+                                (e.g. 'SW', 'STRAT', 'SKG_ReadOnly').
+
+    Returns:
+        dict[str, str]: entity_code → approver_name
+    """
+    sheet_name = f"{application_name}_Approvers"
+    owners = {}
+
+    try:
+        wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    except Exception as exc:
+        log.error("Failed to open HFM entity owners file '%s': %s", excel_path, exc)
+        return owners
+
+    if sheet_name not in wb.sheetnames:
+        log.error(
+            "Sheet '%s' not found in '%s'. Available sheets: %s",
+            sheet_name, excel_path, wb.sheetnames,
+        )
+        wb.close()
+        return owners
+
+    ws = wb[sheet_name]
+    skipped = 0
+    for row in ws.iter_rows(values_only=True):
+        entity_code = row[1] if len(row) > 1 else None
+        approver = row[5] if len(row) > 5 else None
+
+        if not entity_code or not approver:
+            skipped += 1
+            continue
+
+        entity_code = str(entity_code).strip()
+        approver = str(approver).strip()
+
+        # skip header and sentinel values
+        if entity_code in ("Label", "[None]", "") or approver in ("", "Approver"):
+            skipped += 1
+            continue
+
+        owners[entity_code] = approver
+
+    wb.close()
+    log.info(
+        "Parsed HFM entity owners for '%s': %d entries (%d rows skipped)",
+        application_name, len(owners), skipped,
+    )
+    return owners
+
+
+def parse_fdmee_entity_owners(excel_path):
+    """Parse the FDMEE Security Request Form approval matrix.
+
+    Reads the 'FDMEE Locations' sheet and returns a mapping of
+    location name (col 0) → approver display name (col 1).
+
+    Args:
+        excel_path (str): Path to the FDMEE Security Request Form Excel file.
+
+    Returns:
+        dict[str, str]: location_name → approver_name
+    """
+    sheet_name = "FDMEE Locations"
+    owners = {}
+
+    try:
+        wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    except Exception as exc:
+        log.error("Failed to open FDMEE entity owners file '%s': %s", excel_path, exc)
+        return owners
+
+    if sheet_name not in wb.sheetnames:
+        log.error(
+            "Sheet '%s' not found in '%s'. Available sheets: %s",
+            sheet_name, excel_path, wb.sheetnames,
+        )
+        wb.close()
+        return owners
+
+    ws = wb[sheet_name]
+    skipped = 0
+    for row in ws.iter_rows(values_only=True):
+        location = row[0] if len(row) > 0 else None
+        approver = row[1] if len(row) > 1 else None
+
+        if not location or not approver:
+            skipped += 1
+            continue
+
+        location = str(location).strip()
+        approver = str(approver).strip()
+
+        if location in ("Location", "") or approver == "":
+            skipped += 1
+            continue
+
+        owners[location] = approver
+
+    wb.close()
+    log.info(
+        "Parsed FDMEE entity owners: %d entries (%d rows skipped)",
+        len(owners), skipped,
+    )
+    return owners
+
+
+# ===========================================================================
 # Identity classification helpers
 # ===========================================================================
 
@@ -217,10 +339,90 @@ def is_group_entry(name, domain, group_lookup):
 
 
 # ===========================================================================
+# Veza Graph: resolve approver display names to AzureAD idp_unique_id
+# ===========================================================================
+
+def lookup_approver_idp_ids(veza_con, display_names, tenant_id):
+    """Return {display_name: idp_unique_id} for approvers via Veza Graph Query API."""
+    result_map = {}
+    for name in set(display_names):
+        if not name:
+            continue
+        query = {
+            "no_relation": False,
+            "include_nodes": True,
+            "query_type": "SOURCE_TO_DESTINATION",
+            "source_node_types": {
+                "nodes": [
+                    {
+                        "node_type": "AzureADUser",
+                        "tags_to_get": [],
+                        "condition_expression": {
+                            "operator": "AND",
+                            "specs": [],
+                            "tag_specs": [],
+                            "child_expressions": [
+                                {
+                                    "operator": "AND",
+                                    "specs": [
+                                        {
+                                            "property": "name",
+                                            "fn": "EQ",
+                                            "value": name,
+                                            "not": False,
+                                        }
+                                    ],
+                                    "tag_specs": [],
+                                    "child_expressions": [],
+                                },
+                                {
+                                    "operator": "AND",
+                                    "specs": [
+                                        {
+                                            "property": "azure_tenant_id",
+                                            "fn": "IN",
+                                            "value": [tenant_id],
+                                            "not": False,
+                                        }
+                                    ],
+                                    "tag_specs": [],
+                                    "child_expressions": [],
+                                },
+                            ],
+                        },
+                        "direct_relationship_only": False,
+                    }
+                ]
+            },
+            "node_relationship_type": "EFFECTIVE_ACCESS",
+            "result_value_type": "SOURCE_NODES_WITH_COUNTS",
+            "include_all_source_tags_in_results": False,
+            "include_all_destination_tags_in_results": False,
+            "include_sub_permissions": False,
+            "include_permissions_summary": True,
+        }
+        try:
+            resp = veza_con.api_post("/api/v1/assessments/query", data=query)
+            nodes = resp.get("nodes") or resp.get("values") or []
+            if len(nodes) == 1:
+                result_map[name] = nodes[0].get("idp_unique_id")
+            elif len(nodes) == 0:
+                log.debug("No AzureADUser found for approver '%s' — skipping tag", name)
+                result_map[name] = None
+            else:
+                log.warning("Multiple AzureADUsers match '%s' — using first for tag", name)
+                result_map[name] = nodes[0].get("idp_unique_id")
+        except OAAClientError as exc:
+            log.warning("Veza query failed for approver '%s': %s", name, exc)
+            result_map[name] = None
+    return result_map
+
+
+# ===========================================================================
 # OAA payload builder
 # ===========================================================================
 
-def build_oaa_payload(sec_data, groups_csv, memberships, args):
+def build_oaa_payload(sec_data, groups_csv, memberships, args, hfm_owners=None, fdmee_owners=None, idp_id_lookup=None):
     """Build the CustomApplication OAA payload from parsed data."""
 
     app = CustomApplication(
@@ -251,6 +453,9 @@ def build_oaa_payload(sec_data, groups_csv, memberships, args):
     app.property_definitions.define_local_group_property("provider", OAAPropertyType.STRING)
     app.property_definitions.define_local_group_property("internal_id", OAAPropertyType.STRING)
     app.property_definitions.define_resource_property("security_class", "class_name", OAAPropertyType.STRING)
+    app.property_definitions.define_resource_property("security_class", "approver", OAAPropertyType.STRING)
+    app.property_definitions.define_resource_property("fdmee_location", "location_name", OAAPropertyType.STRING)
+    app.property_definitions.define_resource_property("fdmee_location", "approver", OAAPropertyType.STRING)
 
     # ---- Classify identities from .sec USERS_AND_GROUPS ----
     # Identities are case-insensitive (e.g. lmercader@Westrock == LMercader@Group)
@@ -324,6 +529,8 @@ def build_oaa_payload(sec_data, groups_csv, memberships, args):
     log.info("Created %d local roles", len(role_names))
 
     # ---- Create security class resources ----
+    hfm_owners = hfm_owners or {}
+    owner_matches = 0
     for sc_name in sec_data["security_classes"]:
         resource = app.add_resource(
             name=sc_name,
@@ -332,7 +539,38 @@ def build_oaa_payload(sec_data, groups_csv, memberships, args):
         )
         resource.set_property("class_name", sc_name)
 
-    log.info("Created %d security class resources", len(sec_data["security_classes"]))
+        # Entity codes in the spreadsheet omit the "E_" prefix used in .sec files
+        entity_code = sc_name[2:] if sc_name.startswith("E_") else sc_name
+        approver = hfm_owners.get(entity_code)
+        if approver:
+            resource.set_property("approver", approver)
+            owner_matches += 1
+            if idp_id_lookup:
+                unique_id = idp_id_lookup.get(approver)
+                if unique_id:
+                    resource.add_tag("SYSTEM_resource_managers", unique_id)
+
+    log.info(
+        "Created %d security class resources (%d matched to entity owners)",
+        len(sec_data["security_classes"]), owner_matches,
+    )
+
+    # ---- Create FDMEE location resources ----
+    fdmee_owners = fdmee_owners or {}
+    if fdmee_owners:
+        for location_name, approver in fdmee_owners.items():
+            resource = app.add_resource(
+                name=location_name,
+                resource_type="fdmee_location",
+                description=f"FDMEE Data Load Location: {location_name}",
+            )
+            resource.set_property("location_name", location_name)
+            resource.set_property("approver", approver)
+            if idp_id_lookup:
+                unique_id = idp_id_lookup.get(approver)
+                if unique_id:
+                    resource.add_tag("SYSTEM_resource_managers", unique_id)
+        log.info("Created %d FDMEE location resources", len(fdmee_owners))
 
     # ---- Assign role access (case-insensitive identity lookup) ----
     role_assign_count = 0
@@ -455,6 +693,101 @@ def push_to_veza(veza_url, veza_api_key, provider_name, datasource_name, app, dr
 
 
 # ===========================================================================
+# Entity owner assignment via Veza API
+# ===========================================================================
+
+def set_entity_owners_via_api(veza_con, provider_name, datasource_name, hfm_owners, fdmee_owners):
+    """Resolve approver display names to Veza AD identity nodes and set resource owners.
+
+    Runs after a successful OAA push. For each resource with an approver name:
+      1. Query Veza nodes to find the matching ActiveDirectory User by display name.
+      2. Query Veza to find the resource node by name within the datasource.
+      3. POST to the Veza entity owner endpoint to link resource → identity.
+
+    Args:
+        veza_con (OAAClient): Authenticated Veza client.
+        provider_name (str): OAA provider name used during push.
+        datasource_name (str): OAA datasource name used during push.
+        hfm_owners (dict): entity_code → approver_name for HFM security classes.
+        fdmee_owners (dict): location_name → approver_name for FDMEE locations.
+    """
+    all_owners = {}
+    # HFM: resource name in Veza is E_<entity_code> (the full sc_name)
+    for entity_code, approver in hfm_owners.items():
+        all_owners[f"E_{entity_code}"] = approver
+    # FDMEE: resource name is the location name as-is
+    for location_name, approver in fdmee_owners.items():
+        all_owners[location_name] = approver
+
+    if not all_owners:
+        return
+
+    log.info("Setting entity owners via Veza API for %d resources...", len(all_owners))
+    set_count = 0
+    skip_count = 0
+
+    # Cache of resolved approver name → Veza node ID to avoid repeated lookups
+    approver_node_cache = {}
+
+    for resource_name, approver_name in all_owners.items():
+        # Step 1: resolve approver display name to a Veza AD node ID
+        if approver_name not in approver_node_cache:
+            try:
+                result = veza_con.api_get(
+                    "/api/v1/nodes",
+                    params={"filter": f"name:{approver_name}", "node_type": "ActiveDirectory.User"},
+                )
+                nodes = result.get("nodes") or result.get("values") or []
+                if len(nodes) == 1:
+                    approver_node_cache[approver_name] = nodes[0]["id"]
+                elif len(nodes) == 0:
+                    log.debug("No AD user found for approver '%s' — skipping", approver_name)
+                    approver_node_cache[approver_name] = None
+                else:
+                    # Multiple matches — use first but warn
+                    log.warning(
+                        "Multiple AD users match '%s' — using first result", approver_name
+                    )
+                    approver_node_cache[approver_name] = nodes[0]["id"]
+            except OAAClientError as exc:
+                log.warning(
+                    "Veza node lookup failed for approver '%s': %s", approver_name, exc
+                )
+                approver_node_cache[approver_name] = None
+
+        approver_id = approver_node_cache.get(approver_name)
+        if not approver_id:
+            skip_count += 1
+            continue
+
+        # Step 2: set the entity owner via Veza API
+        try:
+            veza_con.api_post(
+                "/api/v1/assessments/entity-owners",
+                data={
+                    "entity_name": resource_name,
+                    "provider_name": provider_name,
+                    "datasource_name": datasource_name,
+                    "owner_node_id": approver_id,
+                    "is_primary": True,
+                },
+            )
+            set_count += 1
+            log.debug("Set owner '%s' on resource '%s'", approver_name, resource_name)
+        except OAAClientError as exc:
+            log.warning(
+                "Failed to set owner '%s' on resource '%s': %s (HTTP %s)",
+                approver_name, resource_name, exc.message, exc.status_code,
+            )
+            skip_count += 1
+
+    log.info(
+        "Entity owner assignment complete: %d set, %d skipped (no AD match or API error)",
+        set_count, skip_count,
+    )
+
+
+# ===========================================================================
 # Configuration loader
 # ===========================================================================
 
@@ -472,6 +805,9 @@ def load_config(args):
         "groups_csv": args.groups_csv or os.getenv("HFM_GROUPS_CSV"),
         "provider_name": args.provider_name,
         "datasource_name": args.datasource_name,
+        "entity_owners_file": args.entity_owners_file or os.getenv("HFM_ENTITY_OWNERS_FILE"),
+        "hfm_application": args.hfm_application or os.getenv("HFM_APPLICATION_NAME"),
+        "fdmee_owners_file": args.fdmee_owners_file or os.getenv("FDMEE_OWNERS_FILE"),
     }
 
     return config
@@ -544,6 +880,26 @@ Examples:
         help="Veza datasource name (default: HFM Security)",
     )
     parser.add_argument(
+        "--entity-owners-file",
+        type=str,
+        help="Path to HFM Security Request Form Excel file containing approval matrices "
+             "(also reads HFM_ENTITY_OWNERS_FILE env var)",
+    )
+    parser.add_argument(
+        "--hfm-application",
+        type=str,
+        choices=["SW", "STRAT", "SKG_ReadOnly", "SKD", "SKIT", "DAILYAPP"],
+        default="SW",
+        help="HFM application name — selects the '<name>_Approvers' sheet "
+             "(default: SW, also reads HFM_APPLICATION_NAME env var)",
+    )
+    parser.add_argument(
+        "--fdmee-owners-file",
+        type=str,
+        help="Path to FDMEE Security Request Form Excel file "
+             "(also reads FDMEE_OWNERS_FILE env var)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Build payload but skip pushing to Veza",
@@ -611,9 +967,40 @@ def main():
     log.info("Parsing Groups CSV: %s", groups_csv_path)
     groups_data, memberships = parse_groups_csv(groups_csv_path)
 
+    # ---- Parse entity owner approval matrices ----
+    hfm_owners = {}
+    fdmee_owners = {}
+
+    if config["entity_owners_file"]:
+        app_name = config["hfm_application"] or "SW"
+        log.info(
+            "Parsing HFM entity owners from '%s' (application: %s)",
+            config["entity_owners_file"], app_name,
+        )
+        hfm_owners = parse_hfm_entity_owners(config["entity_owners_file"], app_name)
+
+    if config["fdmee_owners_file"]:
+        log.info("Parsing FDMEE entity owners from '%s'", config["fdmee_owners_file"])
+        fdmee_owners = parse_fdmee_entity_owners(config["fdmee_owners_file"])
+
+    # ---- Look up idp_unique_id for SYSTEM_resource_managers tags ----
+    idp_id_lookup = {}
+    veza_con = None
+    if not args.dry_run and config["veza_url"] and config["veza_api_key"] and (hfm_owners or fdmee_owners):
+        veza_con = OAAClient(url=config["veza_url"], token=config["veza_api_key"])
+        all_approvers = list(set(hfm_owners.values()) | set(fdmee_owners.values()))
+        idp_id_lookup = lookup_approver_idp_ids(veza_con, all_approvers, AZURE_AD_TENANT_ID)
+        matched = sum(1 for v in idp_id_lookup.values() if v)
+        log.info(
+            "Resolved %d/%d approver idp_unique_ids for SYSTEM_resource_managers tags",
+            matched, len(all_approvers),
+        )
+    elif args.dry_run and (hfm_owners or fdmee_owners):
+        log.info("[DRY RUN] Skipping SYSTEM_resource_managers tag lookup — Veza API not available")
+
     # ---- Build OAA payload ----
     log.info("Building OAA payload...")
-    app = build_oaa_payload(sec_data, groups_data, memberships, args)
+    app = build_oaa_payload(sec_data, groups_data, memberships, args, hfm_owners, fdmee_owners, idp_id_lookup)
 
     # ---- Push to Veza ----
     log.info("=" * 40)
@@ -626,12 +1013,24 @@ def main():
         dry_run=args.dry_run,
     )
 
-    if success:
-        log.info("HFM Hyperion integration completed successfully")
-        sys.exit(0)
-    else:
+    if not success:
         log.error("HFM Hyperion integration failed")
         sys.exit(1)
+
+    # ---- Post-push: set entity owners via Veza API ----
+    if not args.dry_run and (hfm_owners or fdmee_owners):
+        if veza_con is None:
+            veza_con = OAAClient(url=config["veza_url"], token=config["veza_api_key"])
+        set_entity_owners_via_api(
+            veza_con=veza_con,
+            provider_name=config["provider_name"],
+            datasource_name=config["datasource_name"],
+            hfm_owners=hfm_owners,
+            fdmee_owners=fdmee_owners,
+        )
+
+    log.info("HFM Hyperion integration completed successfully")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
