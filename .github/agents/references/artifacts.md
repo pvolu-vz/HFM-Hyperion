@@ -217,22 +217,66 @@ VEZA_API_KEY=your_veza_api_key_here
 
 Write comprehensive documentation covering all of the following sections:
 
-1. **Overview** — what the script does, which Veza entities it creates, data flow
-2. **How It Works** — numbered steps matching the actual code flow
-3. **Prerequisites** — OS, Python version, network access, source system API needs, Veza requirements
-4. **Quick Start** — one-command installer using `curl -fsSL ... | bash`
-5. **Manual Installation** — RHEL and Ubuntu instructions, venv setup, .env config
-6. **Usage** — full CLI arguments table (Argument | Required | Values | Default | Description), with examples
-7. **Deployment on Linux** — service account creation, file permissions, SELinux (RHEL), cron setup, log rotation:
+1. **Overview** — what the script does, which Veza entities it creates, data flow; include the entity model table and OAA permission mapping table
+2. **Entity Relationship Map** — a Mermaid diagram showing exactly what the script pushes to Veza; always required
+
+   Generate a `graph LR` diagram with two subgraphs:
+
+   - **Source subgraph** — label it with the source system name; one node per table/endpoint/file the script reads from; node labels show the table/endpoint name and a brief description
+   - **Veza subgraph** — label it `🔷 Veza Access Graph — OAA CustomApplication`; include one node per OAA entity type the script creates: `Local User`, `Local Role` (if roles exist), `Application Resource` (if resources exist), `Custom Permission` (listing all permission names defined in `add_custom_permission`)
+
+   Edges:
+   - Source → OAA entity: label with `"extract <entity>"`
+   - Source → OAA entity for relationship data (e.g. membership table): label with `"<relationship> assignment"`
+   - Source → `Custom Permission`: label with `"map flags → permissions"` (or equivalent)
+   - Between OAA entities: `Local User -->|"member of"| Local Role`, `Local Role -->|"has permission"| Custom Permission`, `Local User -->|"has permission"| Custom Permission`, `Custom Permission -->|"on resource"| Application Resource`
+
+   Derive every node and edge from the actual script — do not invent tables or entities that the code does not read or create.
+
+   Reference pattern (JDE connector):
+   ```mermaid
+   graph LR
+       subgraph JDE["📊 JDE EnterpriseOne — Source Tables"]
+           F0092["F0092 · F0101 · F01151\nUser Master + Address Book + Email"]
+           F00926["F00926\nRole Definitions + User Assignments"]
+           F9860["F9860 · F00950\nObject Librarian / Programs (fallback)"]
+           F00950["F00950\nSecurity Matrix"]
+       end
+
+       subgraph Veza["🔷 Veza Access Graph — OAA CustomApplication"]
+           LU["Local User"]
+           LR["Local Role"]
+           AR["Application Resource\n(Program / UBE)"]
+           CP["Custom Permission\nview · add · change · delete · run · full_access"]
+       end
+
+       F0092  -->|"extract users"| LU
+       F00926 -->|"extract roles"| LR
+       F00926 -->|"user-role membership"| LU
+       F9860  -->|"extract programs"| AR
+       F00950 -->|"map flags → permissions"| CP
+
+       LU -->|"member of"| LR
+       LR -->|"has permission"| CP
+       LU -->|"has permission"| CP
+       CP -->|"on resource"| AR
+   ```
+
+3. **How It Works** — numbered steps matching the actual code flow
+4. **Prerequisites** — OS, Python version, network access, source system API needs, Veza requirements
+5. **Quick Start** — one-command installer using `curl -fsSL ... | bash`
+6. **Manual Installation** — RHEL and Ubuntu instructions, venv setup, .env config
+7. **Usage** — full CLI arguments table (Argument | Required | Values | Default | Description), with examples
+8. **Deployment on Linux** — service account creation, file permissions, SELinux (RHEL), cron setup, log rotation:
    - Create dedicated service account: `sudo useradd -r -s /bin/bash -m -d /opt/<slug>-veza <slug>-veza`
    - `chmod 600` on `.env`, `chmod 700` on scripts dir
    - SELinux check (`getenforce`) and `restorecon` guidance for RHEL
    - Wrapper script for cron + `/etc/cron.d/` example
    - Log rotation config
-8. **Multiple Instances** (if applicable) — separate .env files, `--env-file` flag, cron staggering
-9. **Security Considerations** — credential rotation, file permissions, SELinux/AppArmor
-10. **Troubleshooting** — auth failures, connectivity issues, missing modules, Veza push warnings
-11. **Changelog** — v1.0 initial release
+9. **Multiple Instances** (if applicable) — separate .env files, `--env-file` flag, cron staggering
+10. **Security Considerations** — credential rotation, file permissions, SELinux/AppArmor
+11. **Troubleshooting** — auth failures, connectivity issues, missing modules, Veza push warnings
+12. **Changelog** — v1.0 initial release
 
 ---
 

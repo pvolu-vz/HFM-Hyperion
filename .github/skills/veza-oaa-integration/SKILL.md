@@ -55,7 +55,7 @@ Before generating any code, check whether `./integrations/<system_slug>/samples/
 
 ## Step 2 — Generate All Artifacts
 
-Use the system name as a slug (lowercase, hyphens) for file naming. Save all generated artifacts under `./integrations/<system_slug>/` (e.g., `./integrations/sap-hr/`). Create the directory if it doesn't exist. Full artifact specifications are in [./references/artifacts.md](./references/artifacts.md). Produce all five files:
+Use the system name as a slug (lowercase, hyphens) for file naming. Save all generated artifacts under `./integrations/<system_slug>/` (e.g., `./integrations/sap-hr/`). Create the directory if it doesn't exist. Full artifact specifications are in [./references/artifacts.md](./references/artifacts.md). Produce all six files:
 
 - **A.** `./integrations/<system_slug>/<system_name>.py` — Main Python integration script
 - **B.** `./integrations/<system_slug>/install_<system_name>.sh` — Bash one-command installer
@@ -63,6 +63,26 @@ Use the system name as a slug (lowercase, hyphens) for file naming. Save all gen
 - **D.** `./integrations/<system_slug>/.env.example` — Credential template
 - **E.** `./integrations/<system_slug>/README.md` — Full deployment documentation
 - **F.** `./integrations/<system_slug>/samples/` — Discovered (not generated): if this directory contains files before Step 2 begins, read them to infer the data model. If it does not exist, create it with a `SAMPLES.md` placeholder.
+- **G.** `./integrations/<system_slug>/preflight.sh` — Pre-flight validation script
+
+**Artifact G — `preflight.sh` spec:**
+
+The preflight script validates all prerequisites before deployment. Structure it as discrete validation functions, one per section:
+
+1. **System Requirements** — Python 3.9+, pip3, curl, jq (optional warning); any database/driver prerequisites for the source type (e.g., ODBC driver for SQL Server, Oracle Instant Client for Oracle DB)
+2. **Python Dependencies** — Check every package in `requirements.txt` is importable; prefer `./venv/bin/python` over system python3; print installed version for each
+3. **Configuration** — Confirm `.env` exists; warn if permissions are not 600; source and validate every required env var is set and not a placeholder (`your_*` pattern); mask `PASSWORD|KEY|TOKEN|SECRET` values in output
+4. **Network Connectivity** — TCP port check to source system host:port; HTTPS check to `$VEZA_URL`; report latency
+5. **API Authentication** — Live auth test against the source system (method matches integration type); live Veza API key test via `GET /api/v1/providers`; display HTTP status and partial response on failure
+6. **Veza Endpoint Access** — POST to Veza Query API to confirm the key has read permissions
+7. **Deployment Structure** — Confirm `<slug>.py` exists and is readable; check `logs/` directory writability; report running user
+
+Script behavior:
+- `--all` flag → run all checks non-interactively; exit 0 (all pass) or 1 (any failure)
+- No arguments → show numbered interactive menu covering the same checks plus utilities: display config, generate `.env` template, install dependencies
+- Write timestamped log to `./integrations/<slug>/preflight_<YYYYMMDD_HHMMSS>.log`
+- Color output: GREEN ✓ pass, RED ✗ fail, YELLOW ⚠ warning, BLUE ℹ info; maintain `TESTS_PASSED / TESTS_FAILED / TESTS_WARNING` counters; print summary at end
+- Use `set -o pipefail`; do NOT use `set -e` (checks must continue past individual failures)
 
 ---
 

@@ -15,11 +15,11 @@ Trigger phrases for delegation: dry-run, test integration, validate payload, loc
 
 ### Automatic post-generation validation
 
-After completing Step 2 (artifact generation), **always delegate to the `OAA Dry-Run Tester` sub-agent** to run a local dry-run (Mode A) before presenting the final output summary. This validates that the generated script executes without errors against the sample data. See [quality-checklist.md — Step 3a](../skills/veza-oaa-integration/references/quality-checklist.md) for the full delegation protocol and parameter template. Skip only if `samples/` contains no data files.
+After completing Step 2 (artifact generation), **always delegate to the `OAA Dry-Run Tester` sub-agent** to run a local dry-run (Mode A) before presenting the final output summary. This validates that the generated script executes without errors against the sample data. See [quality-checklist.md — Step 3a](./references/quality-checklist.md) for the full delegation protocol and parameter template. Skip only if `samples/` contains no data files.
 
 ## Reference Materials
 
-See [../skills/veza-oaa-integration/references/references.md](../skills/veza-oaa-integration/references/references.md) for all external reference materials.
+See [./references/references.md](./references/references.md) for all external reference materials.
 
 ## Constraints
 
@@ -60,7 +60,7 @@ Before generating any code, check whether `./integrations/<system_slug>/samples/
 
 ## Step 2 — Generate All Artifacts
 
-Use the system name as a slug (lowercase, hyphens) for file naming. Save all generated artifacts under `./integrations/<system_slug>/` (e.g., `./integrations/sap-hr/`). Create the directory if it doesn't exist. Full artifact specifications are in [../skills/veza-oaa-integration/references/artifacts.md](../skills/veza-oaa-integration/references/artifacts.md). Produce all five files:
+Use the system name as a slug (lowercase, hyphens) for file naming. Save all generated artifacts under `./integrations/<system_slug>/` (e.g., `./integrations/sap-hr/`). Create the directory if it doesn't exist. Full artifact specifications are in [./references/artifacts.md](./references/artifacts.md). Produce all five files:
 
 - **A.** `./integrations/<system_slug>/<system_name>.py` — Main Python integration script
 - **B.** `./integrations/<system_slug>/install_<system_name>.sh` — Bash one-command installer
@@ -76,4 +76,4 @@ Use the system name as a slug (lowercase, hyphens) for file naming. Save all gen
 After generating all files:
 
 1. **Auto-validate** — Delegate to `OAA Dry-Run Tester` (Mode A) as described in Step 3a of the quality checklist. Pre-supply all parameters so the sub-agent runs non-interactively.
-2. **Report** — Follow the output summary and checklist in [../skills/veza-oaa-integration/references/quality-checklist.md](../skills/veza-oaa-integration/references/quality-checklist.md), incorporating the dry-run results into the auto-validated checklist items.
+2. **Report** — Follow the output summary and checklist in [./references/quality-checklist.md](./references/quality-checklist.md), incorporating the dry-run results into the auto-validated checklist items.
